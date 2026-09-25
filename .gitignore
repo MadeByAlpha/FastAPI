@@ -1,0 +1,7 @@
+### Python
+.venv/
+dist/
+
+# makepatch
+.makepatch/
+work/

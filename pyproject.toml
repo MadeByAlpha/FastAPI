@@ -1,0 +1,75 @@
+[project]
+name = "fastapi-minimal"
+version = "0.1.0"
+authors = [
+    { name = "Alpha", email = "dev@alpha93.kr" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.9.0",
+    "starlette-minimal",
+    "typing-extensions>=4.8.0 ; python_full_version < '3.15'",
+    "typing-inspection>=0.4.2",
+]
+
+
+[dependency-groups]
+dev = [
+    "alpha93-stubs>=1.2.2",
+    "basedpyright>=1.40.1",
+    "makepatch",
+    "mypy>=2.3.1",
+    "ruff>=0.16.8",
+    "ty>=0.0.83",
+]
+
+[tool.uv.sources]
+makepatch = { git = "ssh://git@github.com/MadeByAlpha/makepatch.git" }
+starlette-minimal = { path = "../../starlette/dev" }
+
+[build-system]
+requires = [
+    "hatchling",
+    "makepatch @ git+ssh://git@github.com/MadeByAlpha/makepatch.git",
+]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.hooks.makepatch]
+[tool.hatch.build.targets.wheel]
+packages = ["src/alpha93"]
+
+[tool.makepatch.source]
+upstream = "https://github.com/fastapi/fastapi.git"
+ref = "0.141.1"
+include = { "fastapi" = "fastapi" }
+exclude = [
+]
+work-exclude = [
+    ".github",
+    "docs",
+    "docs_src",
+    "fastapi/.agents",
+    "fastapi/__main__.py",
+    "fastapi/openapi",
+    "fastapi/cli.py",
+    "fastapi/templating.py",
+    "fastapi/testclient.py",
+    "scripts",
+    "tests",
+    ".gitignore",
+    ".pre-commit-config.yaml",
+    ".python-version",
+    "CITATION.cff",
+    "pyproject.toml",
+    "uv.lock",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ty.environment]
+root = [
+    "./typings",
+    "./src",
+    "./work"
+]
