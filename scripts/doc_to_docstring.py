@@ -4,12 +4,17 @@ Convert `annotated_doc.Doc` metadata into plain docstrings.
 
 - `Annotated[T, Doc("...")]` is unwrapped to `T`.
 - `Annotated[T, X, Doc("...")]` keeps the other metadata: `Annotated[T, X]`.
-- Documentation of function parameters is appended to the function docstring as a
-  `## Parameters` section, with one `` ### `name` `` heading per parameter, following
-  the Markdown headings (`## Example`, `## Usage`) already used in the docstrings.
+- Documentation of function parameters becomes a Google style `Args:` section, which
+  basedpyright and ty both use for per-parameter hover and signature help. The section is
+  inserted before the first Markdown heading of the existing docstring (e.g. `## Example`),
+  or at its end when there is none.
 - Documentation of variables and class attributes becomes an attribute docstring right
   after the declaration.
-- `Doc` and `Annotated` imports that become unused are removed.
+- Generated docstring lines longer than `MAX_LINE_LENGTH` are wrapped at word boundaries.
+  Fenced code blocks, headings and tables are left as they are, and a single word longer
+  than the limit (e.g. a URL) is kept whole.
+- `annotated_doc` imports left unused are removed, as are `Annotated` imports whose last
+  usage was removed by the conversion.
 
 Only the edited spans are rewritten; the rest of each file is left untouched.
 
@@ -22,17 +27,34 @@ from __future__ import annotations
 import argparse
 import ast
 import inspect
+import re
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
+from typing import cast, final
 
-PARAMETERS_HEADING = "## Parameters"
+MAX_LINE_LENGTH = 120
+
+ARGS_HEADER = "Args:"
+ARG_INDENT = " " * 4
+ARG_DESCRIPTION_INDENT = " " * 8
 
 DOC_MODULE = "annotated_doc"
 ANNOTATED_MODULES = frozenset({"typing", "typing_extensions"})
 
+FENCE_RE = re.compile(r"(`{3,}|~{3,})")
+HEADING_RE = re.compile(r"#{1,6}(\s|$)")
+LIST_ITEM_RE = re.compile(r"([-*+]|\d+[.)])\s+")
+# A word that would change the Markdown structure if a wrapped line started with it.
+BLOCK_MARKER_RE = re.compile(r"[-*+>|]|#{1,6}|\d+[.)]|=+|-{2,}|`{3,}.*|~{3,}.*")
+
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
+# Nodes that carry source positions.
+Located = ast.stmt | ast.expr
+# Renders docstring lines (relative indentation, already escaped) for a given width.
+Renderer = Callable[[int], list[str]]
 
 
 class ConversionError(Exception):
@@ -46,6 +68,7 @@ class Edit:
     text: str
 
 
+@final
 class Source:
     """Source bytes with conversion from AST positions (UTF-8 byte columns) to offsets."""
 
@@ -60,16 +83,17 @@ class Source:
     def offset(self, lineno: int, col: int) -> int:
         return self.line_starts[lineno - 1] + col
 
-    def start(self, node: ast.AST) -> int:
-        return self.offset(node.lineno, node.col_offset)  # type: ignore[attr-defined]
+    def start(self, node: Located) -> int:
+        return self.offset(node.lineno, node.col_offset)
 
-    def end(self, node: ast.AST) -> int:
-        return self.offset(node.end_lineno, node.end_col_offset)  # type: ignore[attr-defined]
+    def end(self, node: Located) -> int:
+        assert node.end_lineno is not None and node.end_col_offset is not None
+        return self.offset(node.end_lineno, node.end_col_offset)
 
     def text(self, start: int, end: int) -> str:
         return self.data[start:end].decode()
 
-    def segment(self, node: ast.AST) -> str:
+    def segment(self, node: Located) -> str:
         return self.text(self.start(node), self.end(node))
 
     def line_end(self, lineno: int) -> int:
@@ -82,12 +106,13 @@ class Source:
         line = self.data[self.line_starts[lineno - 1] : self.line_end(lineno)].decode()
         return line[: len(line) - len(line.lstrip(" \t"))]
 
-    def starts_line(self, node: ast.AST) -> bool:
+    def starts_line(self, node: Located) -> bool:
         """Whether only whitespace precedes `node` on its first line."""
-        line_start = self.line_starts[node.lineno - 1]  # type: ignore[attr-defined]
+        line_start = self.line_starts[node.lineno - 1]
         return not self.data[line_start : self.start(node)].strip()
 
 
+@final
 class Names:
     """Local names bound to `annotated_doc.Doc`, `Annotated` and their modules."""
 
@@ -141,13 +166,120 @@ def escape_docstring(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
 
 
-def indent_lines(text: str, indent: str, newline: str) -> str:
-    return newline.join(indent + line if line.strip() else "" for line in text.splitlines())
+def starts_block(line: str) -> bool:
+    """Whether a line starts a Markdown block that cannot follow `name:` on the same line."""
+    stripped = line.lstrip()
+    return bool(FENCE_RE.match(stripped) or HEADING_RE.match(stripped) or LIST_ITEM_RE.match(stripped))
 
 
-def docstring_literal(text: str, indent: str, newline: str) -> str:
-    body = indent_lines(escape_docstring(text), indent, newline)
-    return f'"""{newline}{body}{newline}{indent}"""'
+def wrap_line(line: str, width: int, hanging: str | None = None) -> list[str]:
+    """Wrap one line at word boundaries; continuation lines get the `hanging` indent."""
+    stripped = line.lstrip()
+    if len(line) <= width or not stripped or HEADING_RE.match(stripped) or stripped.startswith("|"):
+        return [line]
+    indent = line[: len(line) - len(stripped)]
+    if hanging is None:
+        item = LIST_ITEM_RE.match(stripped)
+        hanging = indent + " " * len(item.group(0)) if item else indent
+
+    rows: list[list[str]] = [[]]
+    length = len(indent)
+    for word in stripped.split():
+        row = rows[-1]
+        if row and length + 1 + len(word) > width:
+            rows.append([word])
+            length = len(hanging) + len(word)
+        else:
+            length += len(word) + (1 if row else 0)
+            row.append(word)
+    # Never start a continuation line with a word that Markdown would read as a new block.
+    for previous, row in pairwise(rows):
+        while len(previous) > 1 and BLOCK_MARKER_RE.fullmatch(row[0]):
+            row.insert(0, previous.pop())
+    return [(indent if index == 0 else hanging) + " ".join(row) for index, row in enumerate(rows)]
+
+
+def wrap_markdown(lines: Iterable[str], width: int) -> list[str]:
+    """Wrap Markdown lines longer than `width`, leaving fenced code blocks untouched."""
+    result: list[str] = []
+    fence: str | None = None
+    for line in lines:
+        stripped = line.lstrip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            result.append(line)
+            continue
+        if match := FENCE_RE.match(stripped):
+            fence = match.group(1)
+            result.append(line)
+            continue
+        result.extend(wrap_line(line, width))
+    return result
+
+
+def render_text(text: str) -> Renderer:
+    return lambda width: wrap_markdown(escape_docstring(text).splitlines(), width)
+
+
+def render_arguments(entries: list[tuple[str, str]]) -> Renderer:
+    """Render a Google style `Args:` section."""
+
+    def render(width: int) -> list[str]:
+        lines = [ARGS_HEADER]
+        for index, (name, text) in enumerate(entries):
+            if index:
+                lines.append("")
+            description = escape_docstring(text).splitlines()
+            if description and description[0] and not starts_block(description[0]):
+                head, rest = f"{ARG_INDENT}{name}: {description[0]}", description[1:]
+            else:
+                head, rest = f"{ARG_INDENT}{name}:", description
+            lines.extend(wrap_line(head, width, ARG_DESCRIPTION_INDENT))
+            lines.extend(wrap_markdown((ARG_DESCRIPTION_INDENT + line if line else "" for line in rest), width))
+        return lines
+
+    return render
+
+
+def indent_block(lines: Iterable[str], indent: str) -> list[str]:
+    return [indent + line if line.strip() else "" for line in lines]
+
+
+def first_heading(lines: list[str]) -> int | None:
+    """Index of the first Markdown heading outside fenced code blocks."""
+    fence: str | None = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+        elif match := FENCE_RE.match(stripped):
+            fence = match.group(1)
+        elif HEADING_RE.match(stripped):
+            return index
+    return None
+
+
+def insert_block(lines: list[str], block: list[str], *, before_heading: bool) -> list[str]:
+    """
+    Insert `block` as its own paragraph, before the first heading or at the end.
+
+    `lines` is the docstring content split into lines: the first one follows the opening
+    quotes and the last one precedes the closing quotes.
+    """
+    lines = list(lines)
+    while len(lines) > 1 and not lines[-1].strip():
+        del lines[-1]
+    index = first_heading(lines) if before_heading else None
+    before, after = (lines, []) if index is None else (lines[:index], lines[index:])
+    while len(before) > 1 and not before[-1].strip():
+        del before[-1]
+    if any(line.strip() for line in before):
+        before.append("")
+    else:
+        before = [""]  # only the line break right after the opening quotes
+    return [*before, *block, *([""] if after else []), *after]
 
 
 def get_docstring(body: list[ast.stmt], index: int) -> ast.Expr | None:
@@ -158,6 +290,7 @@ def get_docstring(body: list[ast.stmt], index: int) -> ast.Expr | None:
     return None
 
 
+@final
 class Converter:
     def __init__(self, path: Path, source: Source, tree: ast.Module) -> None:
         self.path = path
@@ -166,8 +299,8 @@ class Converter:
         self.tree = tree
         self.edits: list[Edit] = []
 
-    def location(self, node: ast.AST) -> str:
-        return f"{self.path}:{node.lineno}"  # type: ignore[attr-defined]
+    def location(self, node: Located) -> str:
+        return f"{self.path}:{node.lineno}"
 
     def strip_doc(self, annotation: ast.expr | None) -> str | None:
         """Remove `Doc` from a top-level `Annotated[...]` and return its text."""
@@ -197,11 +330,12 @@ class Converter:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.convert_function(node)
             for field in ("body", "orelse", "finalbody"):
-                body = getattr(node, field, None)
+                body: object = getattr(node, field, None)
                 if isinstance(body, list):
-                    for index, stmt in enumerate(body):
+                    statements = cast("list[ast.stmt]", body)
+                    for index, stmt in enumerate(statements):
                         if isinstance(stmt, ast.AnnAssign):
-                            self.convert_variable(body, index, stmt)
+                            self.convert_variable(statements, index, stmt)
 
     def convert_function(self, function: FunctionNode) -> None:
         arguments = function.args
@@ -211,13 +345,13 @@ class Converter:
             *((arg.arg, arg) for arg in arguments.kwonlyargs),
             *(() if arguments.kwarg is None else ((f"**{arguments.kwarg.arg}", arguments.kwarg),)),
         ]
-        sections: list[str] = []
+        entries: list[tuple[str, str]] = []
         for name, arg in parameters:
             text = self.strip_doc(arg.annotation)
             if text is not None:
-                sections.append(f"### `{name}`\n\n{text}" if text else f"### `{name}`")
-        if sections:
-            self.append_docstring(function.body, 0, function, "\n\n".join([PARAMETERS_HEADING, *sections]))
+                entries.append((name, text))
+        if entries:
+            self.add_function_docstring(function, render_arguments(entries))
 
     def convert_variable(self, body: list[ast.stmt], index: int, stmt: ast.AnnAssign) -> None:
         text = self.strip_doc(stmt.annotation)
@@ -225,7 +359,7 @@ class Converter:
             return
         existing = get_docstring(body, index + 1)
         if existing is not None:
-            self.extend_docstring(existing, text)
+            self.extend_docstring(existing, render_text(text), before_heading=False)
             return
 
         line_end = self.source.line_end(stmt.end_lineno or stmt.lineno)
@@ -233,53 +367,59 @@ class Converter:
         if rest and not rest.startswith("#"):
             raise ConversionError(f"{self.location(stmt)}: statement is followed by code on the same line")
         indent = self.source.indent_of(stmt.lineno)
-        newline = self.source.newline
-        self.edits.append(Edit(line_end, line_end, newline + indent + docstring_literal(text, indent, newline)))
+        literal = self.new_docstring(render_text(text), indent)
+        self.edits.append(Edit(line_end, line_end, self.source.newline + indent + literal))
 
-    def append_docstring(self, body: list[ast.stmt], index: int, owner: FunctionNode, text: str) -> None:
-        existing = get_docstring(body, index)
+    def new_docstring(self, render: Renderer, indent: str) -> str:
+        newline = self.source.newline
+        body = newline.join(indent_block(render(MAX_LINE_LENGTH - len(indent)), indent))
+        return f'"""{newline}{body}{newline}{indent}"""'
+
+    def add_function_docstring(self, function: FunctionNode, render: Renderer) -> None:
+        existing = get_docstring(function.body, 0)
         if existing is not None:
-            self.extend_docstring(existing, text)
+            self.extend_docstring(existing, render, before_heading=True)
             return
 
-        first = body[index]
+        first = function.body[0]
         newline = self.source.newline
         if self.source.starts_line(first):
             # Insert a new docstring on its own line before the first statement.
             indent = self.source.indent_of(first.lineno)
             line_start = self.source.line_starts[first.lineno - 1]
-            literal = docstring_literal(text, indent, newline)
+            literal = self.new_docstring(render, indent)
             self.edits.append(Edit(line_start, line_start, indent + literal + newline))
         else:
             # `def f(...): ...` -> move the body onto its own lines below the docstring.
-            indent = self.source.indent_of(owner.lineno) + " " * 4
+            indent = self.source.indent_of(function.lineno) + " " * 4
             start = self.source.start(first)
             while start > 0 and self.source.data[start - 1 : start] in (b" ", b"\t"):
                 start -= 1
-            literal = docstring_literal(text, indent, newline)
+            literal = self.new_docstring(render, indent)
             self.edits.append(Edit(start, self.source.start(first), newline + indent + literal + newline + indent))
 
-    def extend_docstring(self, docstring: ast.Expr, text: str) -> None:
-        """Append paragraphs to an existing docstring, keeping its original layout."""
+    def extend_docstring(self, docstring: ast.Expr, render: Renderer, *, before_heading: bool) -> None:
+        """Add a paragraph to an existing docstring, keeping its original layout."""
         literal = self.source.segment(docstring.value)
         indent = self.source.indent_of(docstring.lineno)
         if not self.source.starts_line(docstring):
             indent += " " * 4
         newline = self.source.newline
+        block = indent_block(render(MAX_LINE_LENGTH - len(indent)), indent)
+
         quote_start = len(literal) - len(literal.lstrip("rRuUbBfF"))
         prefix = literal[:quote_start]
         if "r" in prefix.lower() or not literal[quote_start:].startswith('"""') or not literal.endswith('"""'):
             # Unusual literal: rebuild it from its value.
-            value = inspect.cleandoc(docstring.value.value)  # type: ignore[attr-defined]
-            combined = f"{value}\n\n{text}" if value else text
-            replacement = docstring_literal(combined, indent, newline)
+            constant = docstring.value
+            assert isinstance(constant, ast.Constant) and isinstance(constant.value, str)
+            value = inspect.cleandoc(constant.value)
+            prefix = ""
+            lines = ["", *indent_block(escape_docstring(value).splitlines(), indent)] if value else [""]
         else:
-            content = literal[:-3].rstrip()
-            added = indent_lines(escape_docstring(text), indent, newline)
-            if content == literal[: quote_start + 3]:
-                replacement = f'{content}{newline}{added}{newline}{indent}"""'
-            else:
-                replacement = f'{content}{newline}{newline}{added}{newline}{indent}"""'
+            lines = literal[quote_start + 3 : -3].split(newline)
+        lines = insert_block(lines, block, before_heading=before_heading)
+        replacement = f'{prefix}"""{newline.join(lines)}{newline}{indent}"""'
         self.edits.append(Edit(self.source.start(docstring.value), self.source.end(docstring.value), replacement))
 
 
@@ -303,25 +443,29 @@ def used_names(tree: ast.Module) -> dict[str, int]:
 
 
 def remove_unused_imports(data: bytes, before: dict[str, int]) -> bytes:
-    """Remove `Doc`/`Annotated` imports whose last usage was removed by the conversion."""
+    """
+    Remove top-level `annotated_doc` imports that are unused, and `Annotated` imports whose
+    last usage was removed by the conversion.
+    """
     source = Source(data)
     tree = ast.parse(data)
     after = used_names(tree)
 
-    def removable(module: str | None, alias: ast.alias, *, from_import: bool) -> bool:
+    def removable(module: str | None, alias: ast.alias) -> bool:
         local = alias.asname or alias.name.partition(".")[0]
-        if from_import:
-            relevant = module == DOC_MODULE or (module in ANNOTATED_MODULES and alias.name == "Annotated")
-        else:
-            relevant = alias.name == DOC_MODULE
-        return relevant and before.get(local, 0) > 0 and after.get(local, 0) == 0
+        if after.get(local, 0):
+            return False
+        if module == DOC_MODULE or (module is None and alias.name.partition(".")[0] == DOC_MODULE):
+            return True
+        return module in ANNOTATED_MODULES and alias.name == "Annotated" and before.get(local, 0) > 0
 
     edits: list[Edit] = []
     for stmt in tree.body:
         if isinstance(stmt, ast.ImportFrom):
-            keep = [alias for alias in stmt.names if not removable(stmt.module, alias, from_import=True)]
+            module = stmt.module if stmt.level == 0 else None
+            keep = [alias for alias in stmt.names if module is None or not removable(module, alias)]
         elif isinstance(stmt, ast.Import):
-            keep = [alias for alias in stmt.names if not removable(None, alias, from_import=False)]
+            keep = [alias for alias in stmt.names if not removable(None, alias)]
         else:
             continue
         if len(keep) == len(stmt.names):
@@ -349,15 +493,14 @@ def convert_file(path: Path) -> bool:
     tree = ast.parse(data, filename=str(path))
     converter = Converter(path, Source(data), tree)
     converter.run()
-    if not converter.edits:
-        return False
 
-    before = used_names(tree)
-    result = remove_unused_imports(apply_edits(data, converter.edits), before)
+    result = remove_unused_imports(apply_edits(data, converter.edits), used_names(tree))
+    if result == data:
+        return False
     new_tree = ast.parse(result, filename=str(path))
     for call in remaining_doc_usages(new_tree):
         print(f"{path}:{call.lineno}: Doc() left in place (not a top-level Annotated metadata)", file=sys.stderr)
-    path.write_bytes(result)
+    _ = path.write_bytes(result)
     return True
 
 
@@ -371,12 +514,12 @@ def iter_files(paths: Iterable[Path]) -> Iterator[Path]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Convert annotated_doc.Doc metadata into plain docstrings.")
-    parser.add_argument("paths", nargs="*", type=Path, default=[Path("typings")], help="files or directories")
-    args = parser.parse_args(argv)
+    _ = parser.add_argument("paths", nargs="*", type=Path, default=[Path("typings")], help="files or directories")
+    paths = cast("list[Path]", parser.parse_args(argv).paths)
 
     changed = 0
     try:
-        for path in iter_files(args.paths):
+        for path in iter_files(paths):
             if convert_file(path):
                 changed += 1
                 print(f"converted {path}")
