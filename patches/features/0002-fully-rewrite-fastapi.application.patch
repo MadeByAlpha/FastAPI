@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alpha <dev@alpha93.kr>
+Date: Fri, 25 Sep 2026 16:45:07 +0900
+Subject: [PATCH 2/3] fully rewrite fastapi.application
+
+Signed-off-by: Alpha <dev@alpha93.kr>
+
+diff --git a/fastapi/applications.py b/fastapi/applications.py
+index e7fc0aa67..9da13f719 100644
+--- a/fastapi/applications.py
++++ b/fastapi/applications.py
+@@ -1,7 +1,7 @@
+ import os
+ from collections.abc import Awaitable, Callable, Coroutine, Sequence
+ from enum import Enum
+-from typing import Annotated, Any, Literal, TypeVar
++from typing import Annotated, Any, Literal, TypeVar, Self
+ 
+ from fastapi import routing
+ from fastapi.datastructures import Default, DefaultPlaceholder
+@@ -55,21 +55,10 @@ class FastAPI(Starlette):
+     """
+ 
+     def __init__(
+-        self: AppType,
++        self,
+         *,
+         debug: bool = False,
+-        routes: Annotated[
+-            list[BaseRoute] | None,
+-            deprecated(
+-                """
+-                You normally wouldn't use this parameter with FastAPI, it is inherited
+-                from Starlette and supported for compatibility.
+-
+-                In FastAPI, you normally would use the *path operation methods*,
+-                like `app.get()`, `app.post()`, etc.
+-                """
+-            ),
+-        ] = None,
++        routes: list[BaseRoute] | None = None,
+         title: str = "FastAPI",
+         summary: str | None = None,
+         description: str = "",
+@@ -92,20 +81,11 @@ class FastAPI(Starlette):
+             | None = None,
+         on_startup: Sequence[Callable[[], Any]] | None = None,
+         on_shutdown: Sequence[Callable[[], Any]] | None = None,
+-        lifespan: Lifespan[AppType] | None = None,
++        lifespan: Lifespan[Self] | None = None,
+         terms_of_service: str | None = None,
+         contact: dict[str, str | Any] | None = None,
+         license_info: dict[str, str | Any] | None = None,
+-        openapi_prefix: Annotated[
+-            str,
+-            deprecated(
+-                """
+-                "openapi_prefix" has been deprecated in favor of "root_path", which
+-                follows more closely the ASGI standard, is simpler, and more
+-                automatic.
+-                """
+-            ),
+-        ] = "",
++        openapi_prefix: str = "",
+         root_path: str = "",
+         root_path_in_servers: bool = True,
+         responses: dict[int | str, dict[str, Any]] | None = None,
