@@ -24,13 +24,13 @@ dev = [
 ]
 
 [tool.uv.sources]
-makepatch = { git = "ssh://git@github.com/MadeByAlpha/makepatch.git" }
-starlette-minimal = { path = "../../starlette/dev" }
+makepatch = { git = "https://github.com/MadeByAlpha/makepatch.git" }
+starlette-minimal = { git = "https://github.com/MadeByAlpha/Starlette.git" }
 
 [build-system]
 requires = [
     "hatchling",
-    "makepatch @ git+ssh://git@github.com/MadeByAlpha/makepatch.git",
+    "makepatch @ git+https://github.com/MadeByAlpha/makepatch.git",
 ]
 build-backend = "hatchling.build"
 
@@ -67,6 +67,9 @@ work-exclude = [
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.datastructures.Default"]
 
 [tool.ty.environment]
 root = [

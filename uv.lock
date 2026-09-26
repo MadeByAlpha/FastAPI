@@ -8,15 +8,14 @@ resolution-markers = [
 
 [[package]]
 name = "alpha93"
-version = "1.2.2"
+version = "1.2.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "alpha93-stubs" },
     { name = "terser-hints" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/58/2f2276cbb694d516c915fc5e3c174f1832f0144abbca73e20bfa11c94cfc/alpha93-1.2.2.tar.gz", hash = "sha256:519dd616f80aecf767516e1bbcb6dcc720b7ba060c31a7cfa2ce7ece42a18c8c", size = 6565, upload-time = "2026-09-23T03:25:56.732Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/04/f0978bdfcf53abe2a03215e0bbac0f44d60a330383aa7176a017a64a7c41/alpha93-1.2.5.tar.gz", hash = "sha256:80feaf24e6596ab1f999bee50c77621a1eed0772e94b4fb1abd45f506ea8ed16", size = 6675, upload-time = "2026-09-25T08:30:44.409Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/eb/936f1e774ba694d1a105fc300d19bfa7a385053e6cd8fa2ac2461e616a80/alpha93-1.2.2-py3-none-any.whl", hash = "sha256:3b58d8a63c977542f0570132f897bf5e7798e7d7b58f95cec80199b84446b07f", size = 13680, upload-time = "2026-09-23T03:25:54.256Z" },
+    { url = "https://files.pythonhosted.org/packages/76/4a/945a17858fe3c1f281e2430acf185386f14e973be5884274341902646b3b/alpha93-1.2.5-py3-none-any.whl", hash = "sha256:b1f0370ba7357f708cb744a4811bef350942449fdebf368d824fc4ea01104827", size = 13766, upload-time = "2026-09-25T08:30:42.27Z" },
 ]
 
 [[package]]
@@ -150,7 +149,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.9.0" },
-    { name = "starlette-minimal", directory = "../../starlette/dev" },
+    { name = "starlette-minimal", git = "https://github.com/MadeByAlpha/Starlette.git" },
     { name = "typing-extensions", marker = "python_full_version < '3.15'", specifier = ">=4.8.0" },
     { name = "typing-inspection", specifier = ">=0.4.2" },
 ]
@@ -159,7 +158,7 @@ requires-dist = [
 dev = [
     { name = "alpha93-stubs", specifier = ">=1.2.2" },
     { name = "basedpyright", specifier = ">=1.40.1" },
-    { name = "makepatch", git = "ssh://git@github.com/MadeByAlpha/makepatch.git" },
+    { name = "makepatch", git = "https://github.com/MadeByAlpha/makepatch.git" },
     { name = "mypy", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.16.8" },
     { name = "ty", specifier = ">=0.0.83" },
@@ -263,7 +262,7 @@ wheels = [
 [[package]]
 name = "makepatch"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/MadeByAlpha/makepatch.git#a9ac6f221d37aa5d474902986f890926d26d6a3e" }
+source = { git = "https://github.com/MadeByAlpha/makepatch.git#a9ac6f221d37aa5d474902986f890926d26d6a3e" }
 
 [[package]]
 name = "mypy"
@@ -445,28 +444,11 @@ wheels = [
 
 [[package]]
 name = "starlette-minimal"
-version = "0.1.0"
-source = { directory = "../../starlette/dev" }
+version = "1.6.0"
+source = { git = "https://github.com/MadeByAlpha/Starlette.git#17128d8f3b82d7e1ae1a39f93380e9886e9ff0a9" }
 dependencies = [
     { name = "alpha93" },
     { name = "anyio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alpha93", specifier = ">=1.2.2" },
-    { name = "anyio", specifier = ">=4.0.0,<5" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'", specifier = ">=4.10.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "alpha93-stubs", specifier = ">=1.2.2" },
-    { name = "basedpyright", specifier = ">=1.40.1" },
-    { name = "makepatch", git = "ssh://git@github.com/MadeByAlpha/makepatch.git" },
-    { name = "mypy", specifier = ">=2.3.1" },
-    { name = "ruff", specifier = ">=0.16.8" },
-    { name = "ty", specifier = ">=0.0.83" },
 ]
 
 [[package]]
