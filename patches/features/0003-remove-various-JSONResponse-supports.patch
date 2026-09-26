@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Alpha <dev@alpha93.kr>
 Date: Fri, 25 Sep 2026 16:45:23 +0900
-Subject: [PATCH 3/3] remove various JSONResponse supports
+Subject: [PATCH 3/4] remove various JSONResponse supports
 
 Signed-off-by: Alpha <dev@alpha93.kr>
 
